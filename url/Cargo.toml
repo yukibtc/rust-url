@@ -1,6 +1,6 @@
 [package]
 name = "url-fork"
-version = "3.0.0"
+version = "3.0.1"
 edition = "2021"
 description = "Fork of url crate with no_std support"
 homepage = "https://github.com/yukibtc/rust-url"
