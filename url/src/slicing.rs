@@ -6,8 +6,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use core::ops::{Index, Range, RangeFrom, RangeFull, RangeTo};
+
 use crate::Url;
-use std::ops::{Index, Range, RangeFrom, RangeFull, RangeTo};
 
 impl Index<RangeFull> for Url {
     type Output = str;
@@ -65,7 +66,7 @@ fn test_count_digits() {
 /// A range of positions can be used for slicing `Url`:
 ///
 /// ```rust
-/// # use url::{Url, Position};
+/// # use url_fork::{Url, Position};
 /// # fn something(some_url: Url) {
 /// let serialization: &str = &some_url[..];
 /// let serialization_without_fragment: &str = &some_url[..Position::AfterQuery];

@@ -6,176 +6,53 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-/*!
+#![no_std]
 
-rust-url is an implementation of the [URL Standard](http://url.spec.whatwg.org/)
-for the [Rust](http://rust-lang.org/) programming language.
+// For forwards compatibility
+#[cfg(feature = "std")]
+extern crate std;
 
-
-# URL parsing and data structures
-
-First, URL parsing may fail for various reasons and therefore returns a `Result`.
-
-```
-use url::{Url, ParseError};
-
-assert!(Url::parse("http://[:::1]") == Err(ParseError::InvalidIpv6Address))
-```
-
-Let’s parse a valid URL and look at its components.
-
-```
-use url::{Url, Host, Position};
-# use url::ParseError;
-# fn run() -> Result<(), ParseError> {
-let issue_list_url = Url::parse(
-    "https://github.com/rust-lang/rust/issues?labels=E-easy&state=open"
-)?;
-
-
-assert!(issue_list_url.scheme() == "https");
-assert!(issue_list_url.username() == "");
-assert!(issue_list_url.password() == None);
-assert!(issue_list_url.host_str() == Some("github.com"));
-assert!(issue_list_url.host() == Some(Host::Domain("github.com")));
-assert!(issue_list_url.port() == None);
-assert!(issue_list_url.path() == "/rust-lang/rust/issues");
-assert!(issue_list_url.path_segments().map(|c| c.collect::<Vec<_>>()) ==
-        Some(vec!["rust-lang", "rust", "issues"]));
-assert!(issue_list_url.query() == Some("labels=E-easy&state=open"));
-assert!(&issue_list_url[Position::BeforePath..] == "/rust-lang/rust/issues?labels=E-easy&state=open");
-assert!(issue_list_url.fragment() == None);
-assert!(!issue_list_url.cannot_be_a_base());
-# Ok(())
-# }
-# run().unwrap();
-```
-
-Some URLs are said to be *cannot-be-a-base*:
-they don’t have a username, password, host, or port,
-and their "path" is an arbitrary string rather than slash-separated segments:
-
-```
-use url::Url;
-# use url::ParseError;
-
-# fn run() -> Result<(), ParseError> {
-let data_url = Url::parse("data:text/plain,Hello?World#")?;
-
-assert!(data_url.cannot_be_a_base());
-assert!(data_url.scheme() == "data");
-assert!(data_url.path() == "text/plain,Hello");
-assert!(data_url.path_segments().is_none());
-assert!(data_url.query() == Some("World"));
-assert!(data_url.fragment() == Some(""));
-# Ok(())
-# }
-# run().unwrap();
-```
-
-## Serde
-
-Enable the `serde` feature to include `Deserialize` and `Serialize` implementations for `url::Url`.
-
-# Base URL
-
-Many contexts allow URL *references* that can be relative to a *base URL*:
-
-```html
-<link rel="stylesheet" href="../main.css">
-```
-
-Since parsed URLs are absolute, giving a base is required for parsing relative URLs:
-
-```
-use url::{Url, ParseError};
-
-assert!(Url::parse("../main.css") == Err(ParseError::RelativeUrlWithoutBase))
-```
-
-Use the `join` method on an `Url` to use it as a base URL:
-
-```
-use url::Url;
-# use url::ParseError;
-
-# fn run() -> Result<(), ParseError> {
-let this_document = Url::parse("http://servo.github.io/rust-url/url/index.html")?;
-let css_url = this_document.join("../main.css")?;
-assert_eq!(css_url.as_str(), "http://servo.github.io/rust-url/main.css");
-# Ok(())
-# }
-# run().unwrap();
-```
-
-# Feature: `serde`
-
-If you enable the `serde` feature, [`Url`](struct.Url.html) will implement
-[`serde::Serialize`](https://docs.rs/serde/1/serde/trait.Serialize.html) and
-[`serde::Deserialize`](https://docs.rs/serde/1/serde/trait.Deserialize.html).
-See [serde documentation](https://serde.rs) for more information.
-
-```toml
-url = { version = "2", features = ["serde"] }
-```
-
-# Feature: `debugger_visualizer`
-
-If you enable the `debugger_visualizer` feature, the `url` crate will include
-a [natvis file](https://docs.microsoft.com/en-us/visualstudio/debugger/create-custom-views-of-native-objects)
-for [Visual Studio](https://www.visualstudio.com/) that allows you to view
-[`Url`](struct.Url.html) objects in the debugger.
-
-This feature requires Rust 1.71 or later.
-
-```toml
-url = { version = "2", features = ["debugger_visualizer"] }
-```
-
-*/
-
-#![doc(html_root_url = "https://docs.rs/url/2.5.0")]
-#![cfg_attr(
-    feature = "debugger_visualizer",
-    debugger_visualizer(natvis_file = "../../debug_metadata/url.natvis")
-)]
-
-pub use form_urlencoded;
+#[macro_use]
+extern crate alloc;
 
 #[cfg(feature = "serde")]
 extern crate serde;
 
-use crate::host::HostInternal;
-use crate::parser::{to_u32, Context, Parser, SchemeType, PATH_SEGMENT, USERINFO};
-use percent_encoding::{percent_decode, percent_encode, utf8_percent_encode};
-use std::borrow::Borrow;
-use std::cmp;
-use std::fmt::{self, Write};
-use std::hash;
+pub use form_urlencoded;
+
+use alloc::borrow::{Borrow, ToOwned};
+use alloc::string::{String, ToString};
+use core::convert::TryFrom;
+use core::fmt::{self, Write};
+use core::ops::{Range, RangeFrom, RangeTo};
+use core::{cmp, hash, mem, str};
+#[cfg(feature = "std")]
 use std::io;
-use std::mem;
-use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
-use std::ops::{Range, RangeFrom, RangeTo};
+#[cfg(feature = "std")]
+use std::net::{SocketAddr, ToSocketAddrs};
+#[cfg(feature = "std")]
 use std::path::{Path, PathBuf};
-use std::str;
 
-use std::convert::TryFrom;
-
-pub use crate::host::Host;
-pub use crate::origin::{OpaqueOrigin, Origin};
-pub use crate::parser::{ParseError, SyntaxViolation};
-pub use crate::path_segments::PathSegmentsMut;
-pub use crate::slicing::Position;
 pub use form_urlencoded::EncodingOverride;
+use percent_encoding::utf8_percent_encode;
 
 mod host;
+mod net;
 mod origin;
 mod parser;
 mod path_segments;
-mod slicing;
-
 #[doc(hidden)]
 pub mod quirks;
+mod slicing;
+
+pub use crate::host::Host;
+use crate::host::HostInternal;
+use crate::net::IpAddr;
+pub use crate::origin::{OpaqueOrigin, Origin};
+use crate::parser::{to_u32, Context, Parser, SchemeType, USERINFO};
+pub use crate::parser::{ParseError, SyntaxViolation};
+pub use crate::path_segments::PathSegmentsMut;
+pub use crate::slicing::Position;
 
 /// A parsed URL record.
 #[derive(Clone)]
@@ -205,7 +82,6 @@ pub struct Url {
 
 /// Full configuration for the URL parser.
 #[derive(Copy, Clone)]
-#[must_use]
 pub struct ParseOptions<'a> {
     base_url: Option<&'a Url>,
     encoding_override: EncodingOverride<'a>,
@@ -234,16 +110,18 @@ impl<'a> ParseOptions<'a> {
     /// ## Example
     /// ```
     /// use std::cell::RefCell;
-    /// use url::{Url, SyntaxViolation};
-    /// # use url::ParseError;
-    /// # fn run() -> Result<(), url::ParseError> {
+    /// use url_fork::{SyntaxViolation, Url};
+    /// # use url_fork::ParseError;
+    /// # fn run() -> Result<(), url_fork::ParseError> {
     /// let violations = RefCell::new(Vec::new());
     /// let url = Url::options()
     ///     .syntax_violation_callback(Some(&|v| violations.borrow_mut().push(v)))
     ///     .parse("https:////example.com")?;
     /// assert_eq!(url.as_str(), "https://example.com/");
-    /// assert_eq!(violations.into_inner(),
-    ///            vec!(SyntaxViolation::ExpectedDoubleSlash));
+    /// assert_eq!(
+    ///     violations.into_inner(),
+    ///     vec!(SyntaxViolation::ExpectedDoubleSlash)
+    /// );
     /// # Ok(())
     /// # }
     /// # run().unwrap();
@@ -272,8 +150,8 @@ impl Url {
     /// # Examples
     ///
     /// ```rust
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let url = Url::parse("https://example.net")?;
@@ -300,13 +178,18 @@ impl Url {
     /// # Examples
     ///
     /// ```rust
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
-    /// let url = Url::parse_with_params("https://example.net?dont=clobberme",
-    ///                                  &[("lang", "rust"), ("browser", "servo")])?;
-    /// assert_eq!("https://example.net/?dont=clobberme&lang=rust&browser=servo", url.as_str());
+    /// let url = Url::parse_with_params(
+    ///     "https://example.net?dont=clobberme",
+    ///     &[("lang", "rust"), ("browser", "servo")],
+    /// )?;
+    /// assert_eq!(
+    ///     "https://example.net/?dont=clobberme&lang=rust&browser=servo",
+    ///     url.as_str()
+    /// );
     /// # Ok(())
     /// # }
     /// # run().unwrap();
@@ -372,13 +255,13 @@ impl Url {
     /// # Examples
     ///
     /// ```rust
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let base = Url::parse("https://example.net/a/b.html")?;
     /// let url = base.join("c.png")?;
-    /// assert_eq!(url.as_str(), "https://example.net/a/c.png");  // Not /a/b.html/c.png
+    /// assert_eq!(url.as_str(), "https://example.net/a/c.png"); // Not /a/b.html/c.png
     ///
     /// let base = Url::parse("https://example.net/a/b/")?;
     /// let url = base.join("c.png")?;
@@ -407,8 +290,8 @@ impl Url {
     /// # Examples
     ///
     /// ```rust
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let base = Url::parse("https://example.net/a/b.html")?;
@@ -539,8 +422,8 @@ impl Url {
     /// Get default `ParseOptions`, then change base url
     ///
     /// ```rust
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     /// # fn run() -> Result<(), ParseError> {
     /// let options = Url::options();
     /// let api = Url::parse("https://api.example.com")?;
@@ -566,8 +449,8 @@ impl Url {
     /// # Examples
     ///
     /// ```rust
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let url_str = "https://example.net/";
@@ -589,8 +472,8 @@ impl Url {
     /// # Examples
     ///
     /// ```rust
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let url_str = "https://example.net/";
@@ -746,15 +629,15 @@ impl Url {
     /// URL with `ftp` scheme:
     ///
     /// ```rust
-    /// use url::{Host, Origin, Url};
-    /// # use url::ParseError;
+    /// use url_fork::{Host, Origin, Url};
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let url = Url::parse("ftp://example.com/foo")?;
-    /// assert_eq!(url.origin(),
-    ///            Origin::Tuple("ftp".into(),
-    ///                          Host::Domain("example.com".into()),
-    ///                          21));
+    /// assert_eq!(
+    ///     url.origin(),
+    ///     Origin::Tuple("ftp".into(), Host::Domain("example.com".into()), 21)
+    /// );
     /// # Ok(())
     /// # }
     /// # run().unwrap();
@@ -763,15 +646,15 @@ impl Url {
     /// URL with `blob` scheme:
     ///
     /// ```rust
-    /// use url::{Host, Origin, Url};
-    /// # use url::ParseError;
+    /// use url_fork::{Host, Origin, Url};
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let url = Url::parse("blob:https://example.com/foo")?;
-    /// assert_eq!(url.origin(),
-    ///            Origin::Tuple("https".into(),
-    ///                          Host::Domain("example.com".into()),
-    ///                          443));
+    /// assert_eq!(
+    ///     url.origin(),
+    ///     Origin::Tuple("https".into(), Host::Domain("example.com".into()), 443)
+    /// );
     /// # Ok(())
     /// # }
     /// # run().unwrap();
@@ -780,8 +663,8 @@ impl Url {
     /// URL with `file` scheme:
     ///
     /// ```rust
-    /// use url::{Host, Origin, Url};
-    /// # use url::ParseError;
+    /// use url_fork::{Host, Origin, Url};
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let url = Url::parse("file:///tmp/foo")?;
@@ -797,8 +680,8 @@ impl Url {
     /// URL with other scheme:
     ///
     /// ```rust
-    /// use url::{Host, Origin, Url};
-    /// # use url::ParseError;
+    /// use url_fork::{Host, Origin, Url};
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let url = Url::parse("foo:bar")?;
@@ -817,8 +700,8 @@ impl Url {
     /// # Examples
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let url = Url::parse("file:///tmp/foo")?;
@@ -837,8 +720,8 @@ impl Url {
     /// # Examples
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// assert!(Url::parse("http:///tmp/foo")?.is_special());
@@ -864,8 +747,8 @@ impl Url {
     /// # Examples
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let url = Url::parse("ftp://rms@example.com")?;
@@ -900,8 +783,8 @@ impl Url {
     /// # Examples
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let url = Url::parse("unix:/run/foo.socket")?;
@@ -936,8 +819,8 @@ impl Url {
     /// # Examples
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let url = Url::parse("ftp://rms@example.com")?;
@@ -963,8 +846,8 @@ impl Url {
     /// # Examples
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let url = Url::parse("ftp://rms@example.com")?;
@@ -993,8 +876,8 @@ impl Url {
     /// # Examples
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let url = Url::parse("ftp://rms:secret123@example.com")?;
@@ -1031,8 +914,8 @@ impl Url {
     /// # Examples
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let url = Url::parse("ftp://rms@example.com")?;
@@ -1065,8 +948,8 @@ impl Url {
     /// # Examples
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let url = Url::parse("https://127.0.0.1/index.html")?;
@@ -1104,8 +987,8 @@ impl Url {
     /// # Examples
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let url = Url::parse("https://127.0.0.1/index.html")?;
@@ -1139,8 +1022,8 @@ impl Url {
     /// # Examples
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let url = Url::parse("https://127.0.0.1/")?;
@@ -1170,8 +1053,8 @@ impl Url {
     /// # Examples
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let url = Url::parse("https://example.com")?;
@@ -1202,8 +1085,8 @@ impl Url {
     /// # Examples
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let url = Url::parse("foo://example.com")?;
@@ -1235,7 +1118,7 @@ impl Url {
     /// # Examples
     ///
     /// ```no_run
-    /// let url = url::Url::parse("https://example.net/").unwrap();
+    /// let url = url_fork::Url::parse("https://example.net/").unwrap();
     /// let addrs = url.socket_addrs(|| None).unwrap();
     /// std::net::TcpStream::connect(&*addrs)
     /// # ;
@@ -1243,17 +1126,18 @@ impl Url {
     ///
     /// ```
     /// /// With application-specific known default port numbers
-    /// fn socket_addrs(url: url::Url) -> std::io::Result<Vec<std::net::SocketAddr>> {
+    /// fn socket_addrs(url: url_fork::Url) -> std::io::Result<Vec<std::net::SocketAddr>> {
     ///     url.socket_addrs(|| match url.scheme() {
     ///         "socks5" | "socks5h" => Some(1080),
     ///         _ => None,
     ///     })
     /// }
     /// ```
+    #[cfg(feature = "std")]
     pub fn socket_addrs(
         &self,
         default_port_number: impl Fn() -> Option<u16>,
-    ) -> io::Result<Vec<SocketAddr>> {
+    ) -> io::Result<alloc::vec::Vec<SocketAddr>> {
         // Note: trying to avoid the Vec allocation by returning `impl AsRef<[SocketAddr]>`
         // causes borrowck issues because the return value borrows `default_port_number`:
         //
@@ -1262,6 +1146,7 @@ impl Url {
         // > This RFC proposes that *all* type parameters are considered in scope
         // > for `impl Trait` in return position
 
+        // TODO: Return custom error type to support no_std
         fn io_result<T>(opt: Option<T>, message: &str) -> io::Result<T> {
             opt.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, message))
         }
@@ -1286,7 +1171,7 @@ impl Url {
     /// # Examples
     ///
     /// ```rust
-    /// use url::{Url, ParseError};
+    /// use url_fork::{ParseError, Url};
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let url = Url::parse("https://example.com/api/versions?page=2")?;
@@ -1322,10 +1207,24 @@ impl Url {
     /// # Examples
     ///
     /// ```
-    /// use url::Url;
-    /// # use std::error::Error;
+    /// use url_fork::Url;
     ///
-    /// # fn run() -> Result<(), Box<dyn Error>> {
+    /// # use url_fork::ParseError;
+    /// # #[derive(Debug)]
+    /// # /// A simple wrapper error struct for `no_std` support
+    /// # struct TestError;
+    /// # impl From<ParseError> for TestError {
+    /// #   fn from(value: ParseError) -> Self {
+    /// #       TestError {}
+    /// #   }
+    /// # }
+    /// # impl From<&str> for TestError {
+    /// #   fn from(value: &str) -> Self {
+    /// #       TestError {}
+    /// #   }
+    /// # }
+    ///
+    /// # fn run() -> Result<(), TestError> {
     /// let url = Url::parse("https://example.com/foo/bar")?;
     /// let mut path_segments = url.path_segments().ok_or_else(|| "cannot be base")?;
     /// assert_eq!(path_segments.next(), Some("foo"));
@@ -1358,8 +1257,8 @@ impl Url {
     /// # Examples
     ///
     /// ```rust
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// fn run() -> Result<(), ParseError> {
     /// let url = Url::parse("https://example.com/products?page=2")?;
@@ -1399,8 +1298,8 @@ impl Url {
     /// ```rust
     /// use std::borrow::Cow;
     ///
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let url = Url::parse("https://example.com/products?page=2&sort=desc")?;
@@ -1408,8 +1307,14 @@ impl Url {
     ///
     /// assert_eq!(pairs.count(), 2);
     ///
-    /// assert_eq!(pairs.next(), Some((Cow::Borrowed("page"), Cow::Borrowed("2"))));
-    /// assert_eq!(pairs.next(), Some((Cow::Borrowed("sort"), Cow::Borrowed("desc"))));
+    /// assert_eq!(
+    ///     pairs.next(),
+    ///     Some((Cow::Borrowed("page"), Cow::Borrowed("2")))
+    /// );
+    /// assert_eq!(
+    ///     pairs.next(),
+    ///     Some((Cow::Borrowed("sort"), Cow::Borrowed("desc")))
+    /// );
     /// # Ok(())
     /// # }
     /// # run().unwrap();
@@ -1437,8 +1342,8 @@ impl Url {
     /// # Examples
     ///
     /// ```rust
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let url = Url::parse("https://example.com/data.csv#row=4")?;
@@ -1471,8 +1376,8 @@ impl Url {
     /// # Examples
     ///
     /// ```rust
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let mut url = Url::parse("https://example.com/data.csv")?;
@@ -1524,14 +1429,13 @@ impl Url {
         }
     }
 
-    /// Change this URL’s query string. If `query` is `None`, this URL's
-    /// query string will be cleared.
+    /// Change this URL’s query string.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let mut url = Url::parse("https://example.com/products")?;
@@ -1568,9 +1472,7 @@ impl Url {
             });
         } else {
             self.query_start = None;
-            if fragment.is_none() {
-                self.strip_trailing_spaces_from_opaque_path();
-            }
+            self.strip_trailing_spaces_from_opaque_path();
         }
 
         self.restore_already_parsed_fragment(fragment);
@@ -1582,7 +1484,7 @@ impl Url {
     /// The return value has a method-chaining API:
     ///
     /// ```rust
-    /// # use url::{Url, ParseError};
+    /// # use url_fork::{Url, ParseError};
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let mut url = Url::parse("https://example.net?lang=fr#nav")?;
@@ -1596,9 +1498,14 @@ impl Url {
     ///     .clear()
     ///     .append_pair("foo", "bar & baz")
     ///     .append_pair("saisons", "\u{00C9}t\u{00E9}+hiver");
-    /// assert_eq!(url.query(), Some("foo=bar+%26+baz&saisons=%C3%89t%C3%A9%2Bhiver"));
-    /// assert_eq!(url.as_str(),
-    ///            "https://example.net/?foo=bar+%26+baz&saisons=%C3%89t%C3%A9%2Bhiver#nav");
+    /// assert_eq!(
+    ///     url.query(),
+    ///     Some("foo=bar+%26+baz&saisons=%C3%89t%C3%A9%2Bhiver")
+    /// );
+    /// assert_eq!(
+    ///     url.as_str(),
+    ///     "https://example.net/?foo=bar+%26+baz&saisons=%C3%89t%C3%A9%2Bhiver#nav"
+    /// );
     /// # Ok(())
     /// # }
     /// # run().unwrap();
@@ -1644,8 +1551,8 @@ impl Url {
     /// # Examples
     ///
     /// ```rust
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let mut url = Url::parse("https://example.com")?;
@@ -1736,10 +1643,23 @@ impl Url {
     /// # Examples
     ///
     /// ```
-    /// use url::Url;
-    /// # use std::error::Error;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
+    /// # #[derive(Debug)]
+    /// # /// A simple wrapper error struct for `no_std` support
+    /// # struct TestError;
+    /// # impl From<ParseError> for TestError {
+    /// #   fn from(value: ParseError) -> Self {
+    /// #       TestError {}
+    /// #   }
+    /// # }
+    /// # impl From<&str> for TestError {
+    /// #   fn from(value: &str) -> Self {
+    /// #       TestError {}
+    /// #   }
+    /// # }
     ///
-    /// # fn run() -> Result<(), Box<dyn Error>> {
+    /// # fn run() -> Result<(), TestError> {
     /// let mut url = Url::parse("ssh://example.net:2048/")?;
     ///
     /// url.set_port(Some(4096)).map_err(|_| "cannot be base")?;
@@ -1755,10 +1675,23 @@ impl Url {
     /// Known default port numbers are not reflected:
     ///
     /// ```rust
-    /// use url::Url;
-    /// # use std::error::Error;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
+    /// # #[derive(Debug)]
+    /// # /// A simple wrapper error struct for `no_std` support
+    /// # struct TestError;
+    /// # impl From<ParseError> for TestError {
+    /// #   fn from(value: ParseError) -> Self {
+    /// #       TestError {}
+    /// #   }
+    /// # }
+    /// # impl From<&str> for TestError {
+    /// #   fn from(value: &str) -> Self {
+    /// #       TestError {}
+    /// #   }
+    /// # }
     ///
-    /// # fn run() -> Result<(), Box<dyn Error>> {
+    /// # fn run() -> Result<(), TestError> {
     /// let mut url = Url::parse("https://example.org/")?;
     ///
     /// url.set_port(Some(443)).map_err(|_| "cannot be base")?;
@@ -1771,8 +1704,8 @@ impl Url {
     /// Cannot set port for cannot-be-a-base URLs:
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let mut url = Url::parse("mailto:rms@example.net")?;
@@ -1848,8 +1781,8 @@ impl Url {
     /// Change host:
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let mut url = Url::parse("https://example.net")?;
@@ -1864,8 +1797,8 @@ impl Url {
     /// Remove host:
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let mut url = Url::parse("foo://example.net")?;
@@ -1880,8 +1813,8 @@ impl Url {
     /// Cannot remove host for 'special' schemes (e.g. `http`):
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let mut url = Url::parse("https://example.net")?;
@@ -1896,8 +1829,8 @@ impl Url {
     /// Cannot change or remove host for cannot-be-a-base URLs:
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let mut url = Url::parse("mailto:rms@example.net")?;
@@ -2036,7 +1969,7 @@ impl Url {
     /// # Examples
     ///
     /// ```rust
-    /// use url::{Url, ParseError};
+    /// use url_fork::{ParseError, Url};
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let mut url = Url::parse("http://example.com")?;
@@ -2051,7 +1984,7 @@ impl Url {
     /// Cannot change URL's from mailto(cannot-be-base) to ip:
     ///
     /// ```rust
-    /// use url::{Url, ParseError};
+    /// use url_fork::{ParseError, Url};
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let mut url = Url::parse("mailto:rms@example.com")?;
@@ -2063,7 +1996,6 @@ impl Url {
     /// # }
     /// # run().unwrap();
     /// ```
-    ///
     #[allow(clippy::result_unit_err)]
     pub fn set_ip_host(&mut self, address: IpAddr) -> Result<(), ()> {
         if self.cannot_be_a_base() {
@@ -2085,7 +2017,7 @@ impl Url {
     /// # Examples
     ///
     /// ```rust
-    /// use url::{Url, ParseError};
+    /// use url_fork::{ParseError, Url};
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let mut url = Url::parse("mailto:rmz@example.com")?;
@@ -2171,7 +2103,7 @@ impl Url {
     /// Cannot setup username from mailto(cannot-be-base)
     ///
     /// ```rust
-    /// use url::{Url, ParseError};
+    /// use url_fork::{ParseError, Url};
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let mut url = Url::parse("mailto:rmz@example.com")?;
@@ -2186,7 +2118,7 @@ impl Url {
     /// Setup username to user1
     ///
     /// ```rust
-    /// use url::{Url, ParseError};
+    /// use url_fork::{ParseError, Url};
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let mut url = Url::parse("ftp://:secre1@example.com/")?;
@@ -2271,8 +2203,8 @@ impl Url {
     /// Change the URL’s scheme from `https` to `http`:
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let mut url = Url::parse("https://example.net")?;
@@ -2286,8 +2218,8 @@ impl Url {
     /// Change the URL’s scheme from `foo` to `bar`:
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let mut url = Url::parse("foo://example.net")?;
@@ -2302,8 +2234,8 @@ impl Url {
     /// Cannot change URL’s scheme from `https` to `foõ`:
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let mut url = Url::parse("https://example.net")?;
@@ -2318,8 +2250,8 @@ impl Url {
     /// Cannot change URL’s scheme from `mailto` (cannot-be-a-base) to `https`:
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let mut url = Url::parse("mailto:rms@example.net")?;
@@ -2333,8 +2265,8 @@ impl Url {
     /// Cannot change the URL’s scheme from `foo` to `https`:
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let mut url = Url::parse("foo://example.net")?;
@@ -2348,8 +2280,8 @@ impl Url {
     /// Cannot change the URL’s scheme from `http` to `foo`:
     ///
     /// ```
-    /// use url::Url;
-    /// # use url::ParseError;
+    /// use url_fork::Url;
+    /// # use url_fork::ParseError;
     ///
     /// # fn run() -> Result<(), ParseError> {
     /// let mut url = Url::parse("http://example.net")?;
@@ -2423,7 +2355,7 @@ impl Url {
     ///
     /// ```
     /// # if cfg!(unix) {
-    /// use url::Url;
+    /// use url_fork::Url;
     ///
     /// # fn run() -> Result<(), ()> {
     /// let url = Url::from_file_path("/tmp/foo.txt")?;
@@ -2439,7 +2371,12 @@ impl Url {
     /// # run().unwrap();
     /// # }
     /// ```
-    #[cfg(any(unix, windows, target_os = "redox", target_os = "wasi"))]
+    ///
+    /// This method is only available if the `std` Cargo feature is enabled.
+    #[cfg(all(
+        feature = "std",
+        any(unix, windows, target_os = "redox", target_os = "wasi")
+    ))]
     #[allow(clippy::result_unit_err)]
     pub fn from_file_path<P: AsRef<Path>>(path: P) -> Result<Url, ()> {
         let mut serialization = "file://".to_owned();
@@ -2476,100 +2413,17 @@ impl Url {
     ///
     /// Note that `std::path` does not consider trailing slashes significant
     /// and usually does not include them (e.g. in `Path::parent()`).
-    #[cfg(any(unix, windows, target_os = "redox", target_os = "wasi"))]
+    ///
+    /// This method is only available if the `std` Cargo feature is enabled.
+    #[cfg(all(
+        feature = "std",
+        any(unix, windows, target_os = "redox", target_os = "wasi")
+    ))]
     #[allow(clippy::result_unit_err)]
     pub fn from_directory_path<P: AsRef<Path>>(path: P) -> Result<Url, ()> {
         let mut url = Url::from_file_path(path)?;
         if !url.serialization.ends_with('/') {
             url.serialization.push('/')
-        }
-        Ok(url)
-    }
-
-    /// Serialize with Serde using the internal representation of the `Url` struct.
-    ///
-    /// The corresponding `deserialize_internal` method sacrifices some invariant-checking
-    /// for speed, compared to the `Deserialize` trait impl.
-    ///
-    /// This method is only available if the `serde` Cargo feature is enabled.
-    #[cfg(feature = "serde")]
-    #[deny(unused)]
-    pub fn serialize_internal<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::Serialize;
-        // Destructuring first lets us ensure that adding or removing fields forces this method
-        // to be updated
-        let Url {
-            ref serialization,
-            ref scheme_end,
-            ref username_end,
-            ref host_start,
-            ref host_end,
-            ref host,
-            ref port,
-            ref path_start,
-            ref query_start,
-            ref fragment_start,
-        } = *self;
-        (
-            serialization,
-            scheme_end,
-            username_end,
-            host_start,
-            host_end,
-            host,
-            port,
-            path_start,
-            query_start,
-            fragment_start,
-        )
-            .serialize(serializer)
-    }
-
-    /// Serialize with Serde using the internal representation of the `Url` struct.
-    ///
-    /// The corresponding `deserialize_internal` method sacrifices some invariant-checking
-    /// for speed, compared to the `Deserialize` trait impl.
-    ///
-    /// This method is only available if the `serde` Cargo feature is enabled.
-    #[cfg(feature = "serde")]
-    #[deny(unused)]
-    pub fn deserialize_internal<'de, D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        use serde::de::{Deserialize, Error, Unexpected};
-        let (
-            serialization,
-            scheme_end,
-            username_end,
-            host_start,
-            host_end,
-            host,
-            port,
-            path_start,
-            query_start,
-            fragment_start,
-        ) = Deserialize::deserialize(deserializer)?;
-        let url = Url {
-            serialization,
-            scheme_end,
-            username_end,
-            host_start,
-            host_end,
-            host,
-            port,
-            path_start,
-            query_start,
-            fragment_start,
-        };
-        if cfg!(debug_assertions) {
-            url.check_invariants().map_err(|reason| {
-                let reason: &str = &reason;
-                Error::invalid_value(Unexpected::Other("value"), &reason)
-            })?
         }
         Ok(url)
     }
@@ -2582,7 +2436,7 @@ impl Url {
     /// It is the user’s responsibility to check the URL’s scheme before calling this.
     ///
     /// ```
-    /// # use url::Url;
+    /// # use url_fork::Url;
     /// # let url = Url::parse("file:///etc/passwd").unwrap();
     /// let path = url.to_file_path();
     /// ```
@@ -2592,8 +2446,13 @@ impl Url {
     /// or if `Path::new_opt()` returns `None`.
     /// (That is, if the percent-decoded path contains a NUL byte or,
     /// for a Windows path, is not UTF-8.)
+    ///
+    /// This method is only available if the `std` Cargo feature is enabled.
     #[inline]
-    #[cfg(any(unix, windows, target_os = "redox", target_os = "wasi"))]
+    #[cfg(all(
+        feature = "std",
+        any(unix, windows, target_os = "redox", target_os = "wasi")
+    ))]
     #[allow(clippy::result_unit_err)]
     pub fn to_file_path(&self) -> Result<PathBuf, ()> {
         if let Some(segments) = self.path_segments() {
@@ -2797,11 +2656,13 @@ impl<'de> serde::Deserialize<'de> for Url {
     }
 }
 
-#[cfg(any(unix, target_os = "redox", target_os = "wasi"))]
+#[cfg(all(feature = "std", any(unix, target_os = "redox", target_os = "wasi")))]
 fn path_to_file_url_segments(
     path: &Path,
     serialization: &mut String,
 ) -> Result<(u32, HostInternal), ()> {
+    use crate::parser::PATH_SEGMENT;
+    use percent_encoding::percent_encode;
     #[cfg(any(unix, target_os = "redox"))]
     use std::os::unix::prelude::OsStrExt;
     #[cfg(target_os = "wasi")]
@@ -2827,7 +2688,7 @@ fn path_to_file_url_segments(
     Ok((host_end, HostInternal::None))
 }
 
-#[cfg(windows)]
+#[cfg(all(feature = "std", windows))]
 fn path_to_file_url_segments(
     path: &Path,
     serialization: &mut String,
@@ -2835,12 +2696,15 @@ fn path_to_file_url_segments(
     path_to_file_url_segments_windows(path, serialization)
 }
 
+#[cfg(feature = "std")]
 // Build this unconditionally to alleviate https://github.com/servo/rust-url/issues/102
 #[cfg_attr(not(windows), allow(dead_code))]
 fn path_to_file_url_segments_windows(
     path: &Path,
     serialization: &mut String,
 ) -> Result<(u32, HostInternal), ()> {
+    use crate::parser::PATH_SEGMENT;
+    use percent_encoding::percent_encode;
     use std::path::{Component, Prefix};
     if !path.is_absolute() {
         return Err(());
@@ -2899,11 +2763,13 @@ fn path_to_file_url_segments_windows(
     Ok((host_end, host_internal))
 }
 
-#[cfg(any(unix, target_os = "redox", target_os = "wasi"))]
+#[cfg(all(feature = "std", any(unix, target_os = "redox", target_os = "wasi")))]
 fn file_url_segments_to_pathbuf(
     host: Option<&str>,
     segments: str::Split<'_, char>,
 ) -> Result<PathBuf, ()> {
+    use alloc::vec::Vec;
+    use percent_encoding::percent_decode;
     use std::ffi::OsStr;
     #[cfg(any(unix, target_os = "redox"))]
     use std::os::unix::prelude::OsStrExt;
@@ -2944,7 +2810,7 @@ fn file_url_segments_to_pathbuf(
     Ok(path)
 }
 
-#[cfg(windows)]
+#[cfg(all(feature = "std", windows))]
 fn file_url_segments_to_pathbuf(
     host: Option<&str>,
     segments: str::Split<char>,
@@ -2952,12 +2818,14 @@ fn file_url_segments_to_pathbuf(
     file_url_segments_to_pathbuf_windows(host, segments)
 }
 
+#[cfg(feature = "std")]
 // Build this unconditionally to alleviate https://github.com/servo/rust-url/issues/102
 #[cfg_attr(not(windows), allow(dead_code))]
 fn file_url_segments_to_pathbuf_windows(
     host: Option<&str>,
     mut segments: str::Split<'_, char>,
 ) -> Result<PathBuf, ()> {
+    use percent_encoding::percent_decode;
     let mut string = if let Some(host) = host {
         r"\\".to_owned() + host
     } else {

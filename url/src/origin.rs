@@ -6,10 +6,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use alloc::{borrow::ToOwned, string::String};
+use core::sync::atomic::{AtomicUsize, Ordering};
+
 use crate::host::Host;
 use crate::parser::default_port;
 use crate::Url;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub fn url_origin(url: &Url) -> Origin {
     let scheme = url.scheme();

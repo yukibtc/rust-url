@@ -6,14 +6,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::cmp;
-use std::fmt::{self, Formatter};
-use std::net::{Ipv4Addr, Ipv6Addr};
+use alloc::borrow::ToOwned;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use core::cmp;
+use core::fmt::{self, Formatter};
 
 use percent_encoding::{percent_decode, utf8_percent_encode, CONTROLS};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+use crate::net::{Ipv4Addr, Ipv6Addr};
 use crate::parser::{ParseError, ParseResult};
 
 #[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
@@ -308,8 +311,8 @@ fn parse_ipv4number(mut input: &str) -> Result<Option<u32>, ()> {
 
     match u32::from_str_radix(input, r) {
         Ok(num) => Ok(Some(num)),
-        Err(_) => Ok(None), // The only possible error kind here is an integer overflow.
-                            // The validity of the chars in the input is checked above.
+        Err(_) => Ok(None), /* The only possible error kind here is an integer overflow.
+                             * The validity of the chars in the input is checked above. */
     }
 }
 

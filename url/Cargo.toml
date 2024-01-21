@@ -1,48 +1,15 @@
 [package]
-
-name = "url"
-# When updating version, also modify html_root_url in the lib.rs
-version = "2.5.0"
-authors = ["The rust-url developers"]
-
-description = "URL library for Rust, based on the WHATWG URL Standard"
-documentation = "https://docs.rs/url"
-repository = "https://github.com/servo/rust-url"
-readme = "../README.md"
-keywords = ["url", "parser"]
-categories = ["parser-implementations", "web-programming", "encoding"]
+name = "url-fork"
+version = "3.0.0"
+edition = "2021"
+description = "Fork of url crate with no_std support"
+homepage = "https://github.com/yukibtc/rust-url"
+repository = "https://github.com/yukibtc/rust-url.git"
 license = "MIT OR Apache-2.0"
-include = ["src/**/*", "LICENSE-*", "README.md", "tests/**"]
-edition = "2018"
 rust-version = "1.56"
-
-[dev-dependencies]
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-bencher = "0.1"
-
-[dependencies]
-form_urlencoded = { version = "1.2.1", path = "../form_urlencoded" }
-idna = { version = "0.5.0", path = "../idna" }
-percent-encoding = { version = "2.3.1", path = "../percent_encoding" }
-serde = { version = "1.0", optional = true, features = ["derive"] }
-
-[features]
-default = []
-# Enable to use the #[debugger_visualizer] attribute. This feature requires Rust >= 1.71.
-debugger_visualizer = []
-# Expose internal offsets of the URL.
-expose_internals = []
-
-[[test]]
-name = "url_wpt"
-path = "tests/wpt.rs"
-harness = false
-
-[[bench]]
-name = "parse_url"
-path = "benches/parse_url.rs"
-harness = false
+readme = "../README.md"
+keywords = ["url", "parser", "no_std"]
+categories = ["parser-implementations", "web-programming", "encoding"]
 
 [package.metadata.docs.rs]
 features = ["serde"]
@@ -50,3 +17,19 @@ rustdoc-args = ["--generate-link-to-definition"]
 
 [package.metadata.playground]
 features = ["serde"]
+
+[features]
+default = ["std"]
+std = ["form_urlencoded/std", "idna/std", "percent-encoding/std", "serde/std"]
+# Expose internal offsets of the URL.
+expose_internals = []
+
+[dependencies]
+form_urlencoded = { version = "1.2", default-features = false, features = ["alloc"] }
+idna = { version = "0.5", default-features = false, features = ["alloc"] }
+percent-encoding = { version = "2.3", default-features = false, features = ["alloc"] }
+serde = { version = "1.0", default-features = false, optional = true, features = ["derive"] }
+
+[dev-dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_test = "1"
